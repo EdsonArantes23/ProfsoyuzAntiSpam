@@ -11,12 +11,13 @@ from aiogram.types import Message
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 417850992  # Ваш ID жестко в коде
+ADMIN_ID = 417850992
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN не найден в настройках хостинга!")
 
-logging.basicConfig(level=logging.INFO)
+# Увеличиваем уровень логирования для отладки
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # ================= БАЗА ДАННЫХ =================
@@ -290,46 +291,78 @@ async def cmd_show_all(message: Message):
     
     await message.answer(text)
 
-# ================= ОСНОВНОЙ ФИЛЬТР =================
+# ================= ОСНОВНОЙ ФИЛЬТР С ЛОГИРОВАНИЕМ =================
 @dp.message()
 async def message_handler(message: Message):
-    if message.from_user.id == bot.id:
-        return
+    try:
+        # Игнорируем сообщения от самого бота
+        if message.from_user.id == bot.id:
+            return
 
-    chat_id = message.chat.id
-    topic_id = message.message_thread_id if message.is_topic_message else 0
-
-    topics = db_fetchall("SELECT 1 FROM topics WHERE chat_id=? AND topic_id=?", (chat_id, topic_id))
-    if not topics:
-        return
-
-    should_delete = False
-
-    if message.text:
-        for word in get_stop_words(chat_id, topic_id):
-            if word.lower() in message.text.lower():
-                should_delete = True
-                break
+        chat_id = message.chat.id
+        topic_id = message.message_thread_id if message.is_topic_message else 0
         
-        if not should_delete:
-            for cmd in get_clean_commands(chat_id, topic_id):
-                if cmd.lower() in message.text.lower():
-                    should_delete = True
-                    break
-    
-    if not should_delete:
-        if message.from_user.id in get_clean_bots(chat_id, topic_id):
-            should_delete = True
+        # Логируем каждое сообщение
+        logger.info(f"📨 Сообщение от {message.from_user.id} в чате {chat_id}, топик {topic_id}, текст: {message.text[:50] if message.text else 'None'}")
+        
+        # Проверяем, есть ли этот чат и топик в базе
+        topics = db_fetchall("SELECT 1 FROM topics WHERE chat_id=? AND topic_id=?", (chat_id, topic_id))
+        
+        if not topics:
+            logger.warning(f"❌ Чат {chat_id} топик {topic_id} НЕ в базе! Топиков в БД: {get_all_topics()}")
+            return
+        
+        logger.info(f"✅ Чат {chat_id} топик {topic_id} найден в базе")
+        
+        should_delete = False
+        delete_reason = ""
 
-    if should_delete:
-        try:
-            await message.delete()
-        except Exception as e:
-            logger.error(f"Ошибка удаления: {e}")
+        # 1. Проверка стоп-слов
+        if message.text:
+            words = get_stop_words(chat_id, topic_id)
+            for word in words:
+                if word.lower() in message.text.lower():
+                    should_delete = True
+                    delete_reason = f"стоп-слово '{word}'"
+                    break
+            
+            # 2. Проверка команд
+            if not should_delete:
+                cmds = get_clean_commands(chat_id, topic_id)
+                for cmd in cmds:
+                    if cmd.lower() in message.text.lower():
+                        should_delete = True
+                        delete_reason = f"команда '{cmd}'"
+                        break
+        
+        # 3. Проверка ботов/пользователей
+        if not should_delete:
+            clean_bots = get_clean_bots(chat_id, topic_id)
+            if message.from_user.id in clean_bots:
+                should_delete = True
+                delete_reason = f"бот/пользователь {message.from_user.id}"
+        
+        if should_delete:
+            logger.info(f"🗑 УДАЛЯЮ сообщение: {delete_reason}")
+            try:
+                await message.delete()
+                logger.info("✅ Сообщение удалено успешно")
+            except Exception as e:
+                logger.error(f"❌ Ошибка удаления: {e}")
+        else:
+            logger.debug("⏭ Сообщение не подпадает под фильтры")
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка в обработчике: {e}")
 
 # ================= ЗАПУСК =================
 async def main():
-    logger.info("Бот запущен...")
+    logger.info("🚀 Бот запущен...")
+    logger.info(f"👤 Admin ID: {ADMIN_ID}")
+    topics = get_all_topics()
+    logger.info(f"📂 Настроено топиков: {len(topics)}")
+    for chat_id, topic_id in topics:
+        logger.info(f"   - Чат {chat_id}, Топик {topic_id}")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
