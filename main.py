@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import sqlite3
 import os
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F, types
@@ -11,358 +10,139 @@ from aiogram.types import Message
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 417850992
+ADMIN_ID = 417850992  # Ваш ID админа
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN не найден в настройках хостинга!")
 
-# Увеличиваем уровень логирования для отладки
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ================= БАЗА ДАННЫХ =================
-DB_NAME = "bot_settings.db"
+# ================= НАСТРОЙКИ (МЕНЯТЬ ТОЛЬКО ЗДЕСЬ!) =================
 
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS groups (
-            chat_id INTEGER PRIMARY KEY,
-            chat_name TEXT
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS topics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER,
-            topic_id INTEGER,
-            UNIQUE(chat_id, topic_id)
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS stop_words (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER,
-            topic_id INTEGER,
-            word TEXT
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS clean_bots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER,
-            topic_id INTEGER,
-            bot_id INTEGER
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS clean_commands (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER,
-            topic_id INTEGER,
-            command TEXT
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
+# 📍 Где работать
+TARGET_CHAT_ID = -1002977868330   # Группа: Профсоюз Зяблов
+TARGET_TOPIC_ID = 1               # Топик: Общая (из ссылки ..._1)
 
-def db_execute(query, params=()):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(query, params)
-    conn.commit()
-    conn.close()
+# 🤖 Боты: ВСЕ их сообщения будут удаляться в указанном топике
+# (независимо от текста, команд, содержания)
+CLEAN_BOTS = [1264548383]         # pipisabot — удалять ВСЁ
 
-def db_fetchall(query, params=()):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(query, params)
-    result = cursor.fetchall()
-    conn.close()
-    return result
+# ⚡ Команды: удалять сообщения, содержащие эти команды (от любых пользователей)
+CLEAN_COMMANDS = [
+    "/dick",
+    "/top_dick", 
+    "/stats",
+    "/global_top",
+    "/dick@pipisabot",
+    "/top_dick@pipisabot",
+    "/stats@pipisabot",
+    "/global_top@pipisabot"
+]
+
+# 🚫 Стоп-слова: удалять сообщения, содержащие эти слова (от любых пользователей)
+STOP_WORDS = []  # Можно добавить: ["спам", "реклама"]
 
 # ================= ИНИЦИАЛИЗАЦИЯ =================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-init_db()
 
-# ================= ХЕЛПЕРЫ БД =================
-def add_group(chat_id, chat_name=""):
-    db_execute("INSERT OR REPLACE INTO groups (chat_id, chat_name) VALUES (?, ?)", (chat_id, chat_name))
-
-def add_topic(chat_id, topic_id):
-    db_execute("INSERT OR IGNORE INTO topics (chat_id, topic_id) VALUES (?, ?)", (chat_id, topic_id))
-
-def add_stop_word(chat_id, topic_id, word):
-    db_execute("INSERT INTO stop_words (chat_id, topic_id, word) VALUES (?, ?, ?)", (chat_id, topic_id, word))
-
-def add_clean_bot(chat_id, topic_id, bot_id):
-    db_execute("INSERT OR IGNORE INTO clean_bots (chat_id, topic_id, bot_id) VALUES (?, ?, ?)", (chat_id, topic_id, bot_id))
-
-def add_clean_command(chat_id, topic_id, command):
-    db_execute("INSERT OR IGNORE INTO clean_commands (chat_id, topic_id, command) VALUES (?, ?, ?)", (chat_id, topic_id, command))
-
-def get_all_topics():
-    return db_fetchall("SELECT chat_id, topic_id FROM topics")
-
-def get_stop_words(chat_id, topic_id):
-    return [row[0] for row in db_fetchall("SELECT word FROM stop_words WHERE chat_id=? AND topic_id=?", (chat_id, topic_id))]
-
-def get_clean_bots(chat_id, topic_id):
-    return [row[0] for row in db_fetchall("SELECT bot_id FROM clean_bots WHERE chat_id=? AND topic_id=?", (chat_id, topic_id))]
-
-def get_clean_commands(chat_id, topic_id):
-    return [row[0] for row in db_fetchall("SELECT command FROM clean_commands WHERE chat_id=? AND topic_id=?", (chat_id, topic_id))]
-
-# ================= АДМИН КОМАНДЫ =================
+# ================= КОМАНДЫ АДМИНА =================
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
-    text = (
-        "🤖 Универсальный Анти-Спам Бот\n\n"
-        "Только вы (Admin) можете управлять настройками.\n\n"
-        "📋 Команды:\n"
-        "/add_group <id> - Добавить группу\n"
-        "/add_topic <id> <topic_id> - Добавить топик\n"
-        "/add_word <id> <topic_id> <слово> - Стоп-слово\n"
-        "/add_bot <id> <topic_id> <bot_id> - Чистка бота\n"
-        "/add_cmd <id> <topic_id> <команда> - Чистка команды\n"
-        "/show_all - Показать ВСЕ настройки\n"
-        "/show_config <id> <topic_id> - Настройки топика\n"
-        "/my_chats - Список чатов\n"
-        "/help_admin - Справка"
-    )
-    await message.answer(text)
+    await message.answer("🤖 Бот работает!\nВсе настройки в коде.\n/status — показать настройки")
 
-@dp.message(Command("help_admin"))
-async def cmd_help_admin(message: Message):
+@dp.message(Command("status"))
+async def cmd_status(message: Message):
     if message.from_user.id != ADMIN_ID:
-        return
-    text = (
-        "🛠 ИНСТРУКЦИЯ\n\n"
-        "1. Группа: /add_group -100123456789\n"
-        "2. Топик: /add_topic -100123456789 1\n"
-        "3. Слово: /add_word -100123456789 1 спам\n"
-        "4. Бот: /add_bot -100123456789 1 12345678\n"
-        "5. Команда: /add_cmd -100123456789 1 /dick\n\n"
-        "ID топика — цифра после _ в ссылке на тему."
-    )
-    await message.answer(text)
-
-@dp.message(Command("add_group"))
-async def cmd_add_group(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("❌ Пример: /add_group -100123456789")
-        return
-    try:
-        add_group(int(args[1]))
-        await message.answer(f"✅ Группа {args[1]} добавлена.")
-    except ValueError:
-        await message.answer("❌ Неверный ID.")
-
-@dp.message(Command("add_topic"))
-async def cmd_add_topic(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    args = message.text.split()
-    if len(args) < 3:
-        await message.answer("❌ Пример: /add_topic -100123456789 1")
-        return
-    try:
-        add_topic(int(args[1]), int(args[2]))
-        await message.answer(f"✅ Топик {args[2]} активирован.")
-    except ValueError:
-        await message.answer("❌ Неверный ID.")
-
-@dp.message(Command("add_word"))
-async def cmd_add_word(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    args = message.text.split(maxsplit=3)
-    if len(args) < 4:
-        await message.answer("❌ Пример: /add_word -100.. 1 слово")
-        return
-    try:
-        add_stop_word(int(args[1]), int(args[2]), args[3])
-        await message.answer(f"✅ Стоп-слово {args[3]} добавлено.")
-    except ValueError:
-        await message.answer("❌ Неверный ID.")
-
-@dp.message(Command("add_bot"))
-async def cmd_add_bot(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    args = message.text.split()
-    if len(args) < 4:
-        await message.answer("❌ Пример: /add_bot -100.. 1 12345678")
-        return
-    try:
-        add_clean_bot(int(args[1]), int(args[2]), int(args[3]))
-        await message.answer(f"✅ Бот {args[3]} будет удаляться.")
-    except ValueError:
-        await message.answer("❌ Неверный ID.")
-
-@dp.message(Command("add_cmd"))
-async def cmd_add_cmd(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    args = message.text.split(maxsplit=3)
-    if len(args) < 4:
-        await message.answer("❌ Пример: /add_cmd -100.. 1 /dick")
-        return
-    try:
-        add_clean_command(int(args[1]), int(args[2]), args[3])
-        await message.answer(f"✅ Команда {args[3]} будет удаляться.")
-    except ValueError:
-        await message.answer("❌ Неверный ID.")
-
-@dp.message(Command("show_config"))
-async def cmd_show_config(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    args = message.text.split()
-    if len(args) < 3:
-        await message.answer("❌ Пример: /show_config -100.. 1")
-        return
-    try:
-        chat_id, topic_id = int(args[1]), int(args[2])
-        words = get_stop_words(chat_id, topic_id)
-        bots = get_clean_bots(chat_id, topic_id)
-        cmds = get_clean_commands(chat_id, topic_id)
-        
-        text = f"⚙️ Настройки: {chat_id} / Топик {topic_id}\n\n"
-        text += "🚫 Слова: " + (", ".join(words) or "Нет") + "\n"
-        text += "🤖 Боты: " + (", ".join([str(b) for b in bots]) or "Нет") + "\n"
-        text += "⚡ Команды: " + (", ".join(cmds) or "Нет")
-        await message.answer(text)
-    except ValueError:
-        await message.answer("❌ Неверный ID.")
-
-@dp.message(Command("my_chats"))
-async def cmd_my_chats(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    topics = get_all_topics()
-    if not topics:
-        await message.answer("📭 Нет настроенных топиков.")
-        return
-    text = "📂 Активные мониторинги:\n\n"
-    for chat_id, topic_id in topics:
-        text += f"▫️ Группа: {chat_id} | Топик: {topic_id}\n"
-    await message.answer(text)
-
-@dp.message(Command("show_all"))
-async def cmd_show_all(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    topics = get_all_topics()
-    if not topics:
-        await message.answer("📭 Нет настроенных топиков.")
         return
     
-    text = "🌍 ВСЕ НАСТРОЙКИ БОТА\n\n"
-    for chat_id, topic_id in topics:
-        words = get_stop_words(chat_id, topic_id)
-        bots = get_clean_bots(chat_id, topic_id)
-        cmds = get_clean_commands(chat_id, topic_id)
-        
-        text += f"📍 Группа {chat_id} | Топик {topic_id}\n"
-        if words:
-            text += f"   🚫 Слова: {', '.join(words)}\n"
-        if bots:
-            text += f"   🤖 Боты: {', '.join([str(b) for b in bots])}\n"
-        if cmds:
-            text += f"   ⚡ Команды: {', '.join(cmds)}\n"
-        if not words and not bots and not cmds:
-            text += "   ⚪ Нет правил\n"
-        text += "\n"
-    
-    await message.answer(text)
+    text = (
+        f"⚙️ **НАСТРОЙКИ БОТА**\n\n"
+        f"📍 Группа: `{TARGET_CHAT_ID}`\n"
+        f"📁 Топик: `{TARGET_TOPIC_ID}`\n\n"
+        f"🤖 **Боты (удалять ВСЕ сообщения):**\n"
+        + "\n".join([f"- `{b}`" for b in CLEAN_BOTS]) + "\n\n"
+        f"⚡ **Команды (удалять сообщения с ними):**\n"
+        + "\n".join([f"- `{c}`" for c in CLEAN_COMMANDS]) + "\n\n"
+        f"🚫 **Стоп-слова:**\n"
+        + ("\n".join([f"- `{w}`" for w in STOP_WORDS]) or "Нет")
+    )
+    await message.answer(text, parse_mode="Markdown")
 
-# ================= ОСНОВНОЙ ФИЛЬТР С ЛОГИРОВАНИЕМ =================
+@dp.message(Command("test"))
+async def cmd_test(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer("✅ Бот онлайн! Настройки активны.")
+
+# ================= ОСНОВНОЙ ФИЛЬТР =================
+
 @dp.message()
 async def message_handler(message: Message):
     try:
-        # Игнорируем сообщения от самого бота
+        # Игнорируем сообщения от самого себя
         if message.from_user.id == bot.id:
             return
 
         chat_id = message.chat.id
         topic_id = message.message_thread_id if message.is_topic_message else 0
         
-        # Логируем каждое сообщение
-        logger.info(f"📨 Сообщение от {message.from_user.id} в чате {chat_id}, топик {topic_id}, текст: {message.text[:50] if message.text else 'None'}")
-        
-        # Проверяем, есть ли этот чат и топик в базе
-        topics = db_fetchall("SELECT 1 FROM topics WHERE chat_id=? AND topic_id=?", (chat_id, topic_id))
-        
-        if not topics:
-            logger.warning(f"❌ Чат {chat_id} топик {topic_id} НЕ в базе! Топиков в БД: {get_all_topics()}")
+        # 🔹 Проверка группы
+        if chat_id != TARGET_CHAT_ID:
             return
         
-        logger.info(f"✅ Чат {chat_id} топик {topic_id} найден в базе")
+        # 🔹 Проверка топика
+        if TARGET_TOPIC_ID > 0 and topic_id != TARGET_TOPIC_ID:
+            return
         
         should_delete = False
         delete_reason = ""
 
-        # 1. Проверка стоп-слов
-        if message.text:
-            words = get_stop_words(chat_id, topic_id)
-            for word in words:
+        # 🔹 1. ПРОВЕРКА БОТОВ: удаляем ВСЕ сообщения от указанных ботов
+        if message.from_user.id in CLEAN_BOTS:
+            should_delete = True
+            delete_reason = f"БОТ {message.from_user.id} (все сообщения)"
+        
+        # 🔹 2. ПРОВЕРКА КОМАНД: удаляем сообщения с запрещенными командами
+        if not should_delete and message.text:
+            for cmd in CLEAN_COMMANDS:
+                if cmd.lower() in message.text.lower():
+                    should_delete = True
+                    delete_reason = f"команда '{cmd}'"
+                    break
+        
+        # 🔹 3. ПРОВЕРКА СТОП-СЛОВ: удаляем сообщения с запрещенными словами
+        if not should_delete and message.text:
+            for word in STOP_WORDS:
                 if word.lower() in message.text.lower():
                     should_delete = True
                     delete_reason = f"стоп-слово '{word}'"
                     break
-            
-            # 2. Проверка команд
-            if not should_delete:
-                cmds = get_clean_commands(chat_id, topic_id)
-                for cmd in cmds:
-                    if cmd.lower() in message.text.lower():
-                        should_delete = True
-                        delete_reason = f"команда '{cmd}'"
-                        break
         
-        # 3. Проверка ботов/пользователей
-        if not should_delete:
-            clean_bots = get_clean_bots(chat_id, topic_id)
-            if message.from_user.id in clean_bots:
-                should_delete = True
-                delete_reason = f"бот/пользователь {message.from_user.id}"
-        
+        # 🔹 УДАЛЕНИЕ
         if should_delete:
-            logger.info(f"🗑 УДАЛЯЮ сообщение: {delete_reason}")
             try:
                 await message.delete()
-                logger.info("✅ Сообщение удалено успешно")
+                logger.info(f"🗑 УДАЛЕНО: {delete_reason} | От: {message.from_user.id} | Текст: {message.text[:30] if message.text else '(нет текста)'}")
             except Exception as e:
                 logger.error(f"❌ Ошибка удаления: {e}")
-        else:
-            logger.debug("⏭ Сообщение не подпадает под фильтры")
             
     except Exception as e:
         logger.error(f"❌ Ошибка в обработчике: {e}")
 
 # ================= ЗАПУСК =================
+
 async def main():
     logger.info("🚀 Бот запущен...")
     logger.info(f"👤 Admin ID: {ADMIN_ID}")
-    topics = get_all_topics()
-    logger.info(f"📂 Настроено топиков: {len(topics)}")
-    for chat_id, topic_id in topics:
-        logger.info(f"   - Чат {chat_id}, Топик {topic_id}")
+    logger.info(f"📍 Группа: {TARGET_CHAT_ID} | Топик: {TARGET_TOPIC_ID}")
+    logger.info(f"🤖 Ботов (удалять ВСЁ): {CLEAN_BOTS}")
+    logger.info(f"⚡ Команд на чистку: {len(CLEAN_COMMANDS)}")
+    logger.info(f"🚫 Стоп-слов: {len(STOP_WORDS)}")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
