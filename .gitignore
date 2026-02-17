@@ -1,4 +1,24 @@
+# Секреты
+.env
+
+# Python
 *.pyc
 __pycache__/
+*.pyo
+*.pyd
+.Python
+
+# БД и логи
 *.db
-.env
+*.sqlite
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
