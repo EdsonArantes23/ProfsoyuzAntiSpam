@@ -356,7 +356,7 @@ async def callback_all_chats(callback: types.CallbackQuery):
     
     if not rules:
         await callback.message.edit_text(
-            "📭 <b>Нет настроенных правил</b>\n\n"
+            "ostringstream <b>Нет настроенных правил</b>\n\n"
             "Вы можете добавить правила с помощью команды /add",
             parse_mode="HTML",
             reply_markup=create_navigation_keyboard(None)
@@ -480,7 +480,7 @@ async def cmd_all(message: Message):
     
     if not rules:
         await message.answer(
-            "📭 <b>Нет настроенных правил</b>\n\n"
+            "ostringstream <b>Нет настроенных правил</b>\n\n"
             "Вы можете добавить правила с помощью команды /add",
             parse_mode="HTML"
         )
@@ -541,7 +541,7 @@ async def cmd_rules(message: Message):
         
         if not words:
             await message.answer(
-                f"📭 <b>Нет правил для {get_chat_type_prefix(topic_id)}{topic_id or ''}</b>\n\n"
+                f"ostringstream <b>Нет правил для {get_chat_type_prefix(topic_id)}{topic_id or ''}</b>\n\n"
                 "Вы можете добавить правила с помощью команды:\n"
                 f"/add <code>{chat_id}</code> <code>{topic_id or 0}</code> <code>&lt;слово&gt;</code>",
                 parse_mode="HTML"
