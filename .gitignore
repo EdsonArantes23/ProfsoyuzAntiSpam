@@ -4,22 +4,13 @@
 # Python
 *.pyc
 __pycache__/
-*.pyo
-*.pyd
-.Python
 
-# БД и логи
+# БД и файлы данных
 *.db
 *.sqlite
 *.log
-data.json 
+data.json
 
 # IDE
-.vscode/
 .idea/
-*.swp
-*~
-
-# OS
-.DS_Store
-Thumbs.db
+.vscode/
