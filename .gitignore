@@ -22,4 +22,29 @@ data.json
 
 # OS
 .DS_Store
+Thumbs.db# Секреты
+.env
+
+# Python
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+
+# БД и логи
+*.db
+*.sqlite
+*.log
+data.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
 Thumbs.db
+
