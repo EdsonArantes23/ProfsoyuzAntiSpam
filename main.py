@@ -218,7 +218,6 @@ async def is_admin_in_pm(message: Message):
 async def cmd_start(message: Message):
     if message.chat.type != "private":
         return
-    
     if message.from_user.id == ADMIN_ID:
         await message.answer(
             "🤖 **ProfsoyuzAntiSpam Bot**\n\n"
@@ -244,7 +243,6 @@ async def cmd_start(message: Message):
 async def cmd_info(message: Message):
     if not await is_admin_in_pm(message):
         return
-    
     if message.reply_to_message:
         fwd = message.reply_to_message
         chat_id = fwd.chat.id
@@ -276,16 +274,15 @@ async def cmd_info(message: Message):
 async def cmd_all(message: Message):
     if not await is_admin_in_pm(message):
         return
-    
     rules = await get_all_rules_summary()
-    
+
     if not rules:
         await message.answer("📭 Нет настроенных правил")
         return
-    
+
     text = "📊 **Все правила во всех чатах**\n\n"
     current_chat = None
-    
+
     for chat_id, topic_id, words in rules:
         if chat_id != current_chat:
             current_chat = chat_id
@@ -299,16 +296,15 @@ async def cmd_all(message: Message):
             if len(words) > 5:
                 preview += f" ... +{len(words) - 5}"
             text += f"     Пример: {preview}\n"
-    
+
     await message.answer(text, parse_mode="Markdown")
 
 @dp.message(Command("rules"))
 async def cmd_rules(message: Message):
     if not await is_admin_in_pm(message):
         return
-    
     args = message.text.split()
-    
+
     if len(args) < 2:
         await message.answer(
             "❌ **Неверный формат**\n\n"
@@ -319,7 +315,7 @@ async def cmd_rules(message: Message):
             parse_mode="Markdown"
         )
         return
-    
+
     try:
         chat_id = int(args[1])
         
@@ -368,9 +364,8 @@ async def cmd_rules(message: Message):
 async def cmd_add(message: Message):
     if not await is_admin_in_pm(message):
         return
-    
     args = message.text.split()
-    
+
     if len(args) < 4:
         await message.answer(
             "❌ **Неверный формат**\n\n"
@@ -381,7 +376,7 @@ async def cmd_add(message: Message):
             parse_mode="Markdown"
         )
         return
-    
+
     try:
         chat_id = int(args[1])
         topic_id = int(args[2]) if args[2] != "0" else None
@@ -411,9 +406,8 @@ async def cmd_add(message: Message):
 async def cmd_del(message: Message):
     if not await is_admin_in_pm(message):
         return
-    
     args = message.text.split()
-    
+
     if len(args) < 4:
         await message.answer(
             "❌ **Неверный формат**\n\n"
@@ -423,7 +417,7 @@ async def cmd_del(message: Message):
             parse_mode="Markdown"
         )
         return
-    
+
     try:
         chat_id = int(args[1])
         topic_id = int(args[2]) if args[2] != "0" else None
@@ -455,9 +449,8 @@ async def cmd_del(message: Message):
 async def cmd_clean(message: Message):
     if not await is_admin_in_pm(message):
         return
-    
     args = message.text.split()
-    
+
     if len(args) < 4:
         await message.answer(
             "❌ **Неверный формат**\n\n"
@@ -467,7 +460,7 @@ async def cmd_clean(message: Message):
             parse_mode="Markdown"
         )
         return
-    
+
     try:
         chat_id = int(args[1])
         topic_id = int(args[2]) if args[2] != "0" else None
@@ -515,9 +508,8 @@ async def cmd_clean(message: Message):
 async def cmd_undo(message: Message):
     if not await is_admin_in_pm(message):
         return
-    
     args = message.text.split()
-    
+
     if len(args) < 3:
         await message.answer(
             "❌ **Неверный формат**\n\n"
@@ -527,7 +519,7 @@ async def cmd_undo(message: Message):
             parse_mode="Markdown"
         )
         return
-    
+
     try:
         chat_id = int(args[1])
         topic_id = int(args[2]) if args[2] != "0" else None
@@ -558,27 +550,26 @@ async def cmd_undo(message: Message):
 async def check_spam(message: Message):
     if message.chat.type == "private":
         return
-    
     chat_id = message.chat.id
     topic_id = message.message_thread_id if message.is_topic_message else None
     user_id = message.from_user.id
     text = message.text or ""
-    
+
     # Кэшируем сообщение (для функции /clean)
     await cache_message(message.message_id, chat_id, topic_id, user_id, text)
-    
+
     # Если нет текста — пропускаем
     if not text:
         return
-    
+
     # Загружаем правила: сначала для ветки, потом для всей группы
     words = await get_rules(chat_id, topic_id)
     if not words:
         words = await get_rules(chat_id, None)
-    
+
     if not words:
         return
-    
+
     # Проверка стоп-слов
     for word in words:
         if word.lower() in text.lower():
