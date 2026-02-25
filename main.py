@@ -414,8 +414,16 @@ async def cmd_info(message: Message):
     if message.reply_to_message:
         fwd = message.reply_to_message
         chat_id = fwd.chat.id
-        topic_id = fwd.message_thread_id if hasattr(fwd, 'is_topic_message') and fwd.is_topic_message else None
+        
+        # ПРАВИЛЬНЫЙ СПОСОБ ОПРЕДЕЛЕНИЯ ВЕТКИ В AIOTGRAM 3.X
+        topic_id = fwd.message_thread_id  # Это ключевая исправленная строка
+        
         chat_name = fwd.chat.title or "Чат"
+        
+        # ДОБАВЛЯЕМ ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ
+        logging.info(f"ℹ️ Получен запрос info для чата: {chat_id}, ветка: {topic_id}")
+        logging.info(f"ℹ️ Тип объекта: {type(fwd)}")
+        logging.info(f"ℹ️ Доступные атрибуты: {dir(fwd)}")
         
         text = (
             "🔍 <b>Информация о чате</b>\n\n"
@@ -425,6 +433,8 @@ async def cmd_info(message: Message):
         
         if topic_id is not None:
             text += f"🧵 <b>Topic ID:</b> <code>{topic_id}</code>\n"
+            # ДОБАВЛЯЕМ ПОДСКАЗКУ ПОЛЬЗОВАТЕЛЮ
+            text += f"💡 <b>Используйте этот ID:</b> <code>{topic_id}</code>\n"
         else:
             text += "🧵 <b>Topic ID:</b> <code>0</code> (обычная группа)\n"
         
@@ -432,11 +442,25 @@ async def cmd_info(message: Message):
         
         # Создаем клавиатуру с быстрыми действиями
         keyboard = InlineKeyboardBuilder()
-        keyboard.button(text="📋 Просмотреть правила", callback_data=f"rules_{chat_id}_0")
-        keyboard.button(text="➕ Добавить правило", callback_data=f"add_{chat_id}_0")
+        if topic_id is not None:
+            keyboard.button(text="📋 Просмотреть правила", callback_data=f"rules_{chat_id}_{topic_id}")
+            keyboard.button(text="➕ Добавить правило", callback_data=f"add_{chat_id}_{topic_id}")
+        else:
+            keyboard.button(text="📋 Просмотреть правила", callback_data=f"rules_{chat_id}_0")
+            keyboard.button(text="➕ Добавить правило", callback_data=f"add_{chat_id}_0")
         keyboard.adjust(1)
         
         await message.answer(text, parse_mode="HTML", reply_markup=keyboard.as_markup())
+        
+        # ДОПОЛНИТЕЛЬНОЕ УВЕДОМЛЕНИЕ В ЛС
+        await message.answer(
+            "⚠️ <b>Важно:</b>\n"
+            "• Ветка в Telegram имеет <b>свой уникальный ID</b>, который не совпадает с номером в URL\n"
+            "• Используйте именно этот ID в командах\n"
+            "• Пример правильной команды:\n"
+            f"<code>/add {chat_id} {topic_id or '0'} /dick</code>",
+            parse_mode="HTML"
+        )
     else:
         await message.answer(
             "ℹ️ <b>Как узнать ID чата или темы?</b>\n\n"
@@ -765,7 +789,8 @@ async def check_spam(message: Message):
         return
     
     chat_id = message.chat.id
-    topic_id = message.message_thread_id if message.is_topic_message else None
+    # ПРАВИЛЬНЫЙ СПОСОБ ОПРЕДЕЛЕНИЯ ВЕТКИ В AIOTGRAM 3.X
+    topic_id = message.message_thread_id
     user_id = message.from_user.id
     is_bot = message.from_user.is_bot
     text = message.text or ""
