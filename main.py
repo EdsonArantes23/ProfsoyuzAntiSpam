@@ -11,9 +11,10 @@ from datetime import datetime
 
 # --- КОНФИГУРАЦИЯ ---
 load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 417850992
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+ADMIN_ID = 417850992  # Ваш ID
 
+# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -766,13 +767,18 @@ async def check_spam(message: Message):
     chat_id = message.chat.id
     topic_id = message.message_thread_id if message.is_topic_message else None
     user_id = message.from_user.id
+    is_bot = message.from_user.is_bot
     text = message.text or ""
+    
+    # 🔥 ДОБАВЬТЕ ЭТО ЛОГИРОВАНИЕ
+    logging.info(f"📨 Получено сообщение: chat={chat_id}, topic={topic_id}, user={user_id}, is_bot={is_bot}, text='{text[:50]}'")
     
     # Кэшируем сообщение (для функции /clean)
     cache_message(message.message_id, chat_id, topic_id, user_id, text)
     
     # Если нет текста — пропускаем
     if not text:
+        logging.info("⚠️ Нет текста, пропускаем")
         return
     
     # Загружаем правила: сначала для ветки, потом для всей группы
@@ -781,16 +787,18 @@ async def check_spam(message: Message):
         words = get_rules(chat_id, None)
     
     if not words:
+        logging.info("ℹ️ Нет правил для этого чата")
         return
     
     # Проверка стоп-слов
     for word in words:
         if word.lower() in text.lower():
+            logging.info(f"🗑 СТОП-СЛОВО НАЙДЕНО: '{word}'")
             try:
                 await message.delete()
-                logging.info(f"🗑 Удалено: '{word}' | Чат:{chat_id} Ветка:{topic_id} Юзер:{user_id}")
+                logging.info(f"✅ УСПЕШНО УДАЛЕНО")
             except Exception as e:
-                logging.error(f"❌ Ошибка удаления: {e}")
+                logging.error(f"❌ ОШИБКА УДАЛЕНИЯ: {type(e).__name__}: {e}")
             break
 
 # --- ОЧИСТКА КЭША (каждые 6 часов) ---
