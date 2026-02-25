@@ -1,221 +1,195 @@
 import asyncio
 import logging
 import json
-import aiosqlite
+import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
-import os
 from datetime import datetime
 
 # --- КОНФИГУРАЦИЯ ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 417850992  # Ваш ID
+ADMIN_ID = 417850992
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# --- БАЗА ДАННЫХ ---
-DB_NAME = "antispam.db"
+# --- JSON ХРАНИЛИЩЕ (вместо SQLite) ---
+DATA_FILE = "data.json"
 
-async def init_db():
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS rules (
-                chat_id INTEGER,
-                topic_id INTEGER,
-                spam_words TEXT,
-                PRIMARY KEY (chat_id, topic_id)
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER,
-                topic_id INTEGER,
-                old_words TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS message_cache (
-                message_id INTEGER,
-                chat_id INTEGER,
-                topic_id INTEGER,
-                user_id INTEGER,
-                text TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (message_id, chat_id)
-            )
-        """)
-        await db.commit()
+def load_data():
+    """Загружает данные из JSON файла"""
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logging.error(f"Ошибка загрузки данных: {e}")
+    return {"rules": {}, "history": [], "cache": []}
 
-# --- ФУНКЦИИ БД ---
+def save_data(data):
+    """Сохраняет данные в JSON файл"""
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.error(f"Ошибка сохранения: {e}")
 
-async def get_rules(chat_id, topic_id=None):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(
-            "SELECT spam_words FROM rules WHERE chat_id = ? AND topic_id = ?", 
-            (chat_id, topic_id)
-        ) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                return json.loads(row[0])
-        
-        async with db.execute(
-            "SELECT spam_words FROM rules WHERE chat_id = ? AND topic_id IS NULL", 
-            (chat_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                return json.loads(row[0])
-        
-        return []
+def get_rules_key(chat_id, topic_id):
+    """Генерирует ключ для правил"""
+    return f"{chat_id}_{topic_id}" if topic_id is not None else f"{chat_id}_global"
 
-async def get_all_topics_for_chat(chat_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(
-            "SELECT topic_id, spam_words FROM rules WHERE chat_id = ? ORDER BY topic_id",
-            (chat_id,)
-        ) as cursor:
-            rows = await cursor.fetchall()
-            return [(row[0], json.loads(row[1])) for row in rows]
+def get_rules(chat_id, topic_id=None):
+    """Получает правила для чата/темы"""
+    data = load_data()
+    key = get_rules_key(chat_id, topic_id)
+    return data["rules"].get(key, [])
 
-async def get_all_rules_summary():
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(
-            "SELECT chat_id, topic_id, spam_words FROM rules ORDER BY chat_id, topic_id"
-        ) as cursor:
-            rows = await cursor.fetchall()
-            return [(row[0], row[1], json.loads(row[2])) for row in rows]
+def add_rule(chat_id, topic_id, word):
+    """Добавляет правило"""
+    data = load_data()
+    key = get_rules_key(chat_id, topic_id)
+    
+    if key not in data["rules"]:
+        data["rules"][key] = []
+    
+    if word not in data["rules"][key]:
+        # Сохраняем историю для отката
+        data["history"].append({
+            "chat_id": chat_id,
+            "topic_id": topic_id,
+            "action": "add",
+            "word": word,
+            "old_words": data["rules"][key].copy(),
+            "timestamp": datetime.now().isoformat()
+        })
+        data["rules"][key].append(word)
+        save_data(data)
+        return True
+    return False
 
-async def save_rules_backup(chat_id, topic_id, old_words):
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute(
-            "INSERT INTO history (chat_id, topic_id, old_words) VALUES (?, ?, ?)",
-            (chat_id, topic_id, json.dumps(old_words if old_words else []))
-        )
-        await db.commit()
+def del_rule(chat_id, topic_id, word):
+    """Удаляет правило"""
+    data = load_data()
+    key = get_rules_key(chat_id, topic_id)
+    
+    if key in data["rules"] and word in data["rules"][key]:
+        # Сохраняем историю для отката
+        data["history"].append({
+            "chat_id": chat_id,
+            "topic_id": topic_id,
+            "action": "del",
+            "word": word,
+            "old_words": data["rules"][key].copy(),
+            "timestamp": datetime.now().isoformat()
+        })
+        data["rules"][key].remove(word)
+        save_data(data)
+        return True
+    return False
 
-async def update_rules(chat_id, topic_id, new_words):
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
-            INSERT OR REPLACE INTO rules (chat_id, topic_id, spam_words) 
-            VALUES (?, ?, ?)
-        """, (chat_id, topic_id, json.dumps(new_words)))
-        await db.commit()
+def undo_last_change(chat_id, topic_id):
+    """Откатывает последнее изменение"""
+    data = load_data()
+    # Ищем последнее изменение для этого чата/топика
+    for i in range(len(data["history"]) - 1, -1, -1):
+        h = data["history"][i]
+        if h["chat_id"] == chat_id and h["topic_id"] == topic_id:
+            # Восстанавливаем
+            key = get_rules_key(chat_id, topic_id)
+            data["rules"][key] = h["old_words"]
+            # Удаляем запись истории
+            data["history"].pop(i)
+            save_data(data)
+            return True
+    return False
 
-async def delete_single_rule(chat_id, topic_id, word_to_delete):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(
-            "SELECT spam_words FROM rules WHERE chat_id = ? AND topic_id = ?",
-            (chat_id, topic_id)
-        ) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                current_words = json.loads(row[0])
-                if word_to_delete in current_words:
-                    await save_rules_backup(chat_id, topic_id, current_words)
-                    current_words.remove(word_to_delete)
-                    if current_words:
-                        await update_rules(chat_id, topic_id, current_words)
-                    else:
-                        await db.execute(
-                            "DELETE FROM rules WHERE chat_id = ? AND topic_id = ?",
-                            (chat_id, topic_id)
-                        )
-                        await db.commit()
-                    return True, len(current_words)
-                return False, len(current_words)
-            return False, 0
+def cache_message(message_id, chat_id, topic_id, user_id, text):
+    """Кэширует сообщение"""
+    data = load_data()
+    # Добавляем в кэш
+    data["cache"].append({
+        "message_id": message_id,
+        "chat_id": chat_id,
+        "topic_id": topic_id,
+        "user_id": user_id,
+        "text": text,
+        "timestamp": datetime.now().isoformat()
+    })
+    # Храним только последние 1000 сообщений
+    if len(data["cache"]) > 1000:
+        data["cache"] = data["cache"][-1000:]
+    save_data(data)
 
-async def undo_last_change(chat_id, topic_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(
-            "SELECT id, old_words FROM history WHERE chat_id = ? AND topic_id IS ? ORDER BY id DESC LIMIT 1",
-            (chat_id, topic_id)
-        ) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                history_id, old_words = row
-                await db.execute("""
-                    INSERT OR REPLACE INTO rules (chat_id, topic_id, spam_words) 
-                    VALUES (?, ?, ?)
-                """, (chat_id, topic_id, old_words))
-                await db.execute("DELETE FROM history WHERE id = ?", (history_id,))
-                await db.commit()
-                return True
-            return False
+def get_user_messages(chat_id, user_id, topic_id=None):
+    """Получает сообщения пользователя"""
+    data = load_data()
+    messages = []
+    for msg in data["cache"]:
+        if msg["chat_id"] == chat_id and msg["user_id"] == user_id:
+            if topic_id is None or msg["topic_id"] == topic_id:
+                messages.append(msg["message_id"])
+    return messages
 
-async def get_all_chats_with_rules():
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(
-            "SELECT DISTINCT chat_id FROM rules ORDER BY chat_id"
-        ) as cursor:
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
+def clear_user_cache(chat_id, user_id, topic_id=None):
+    """Очищает кэш пользователя"""
+    data = load_data()
+    data["cache"] = [
+        msg for msg in data["cache"]
+        if not (msg["chat_id"] == chat_id and 
+                msg["user_id"] == user_id and 
+                (topic_id is None or msg["topic_id"] == topic_id))
+    ]
+    save_data(data)
 
-async def cache_message(message_id, chat_id, topic_id, user_id, text):
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
-            INSERT OR REPLACE INTO message_cache (message_id, chat_id, topic_id, user_id, text)
-            VALUES (?, ?, ?, ?, ?)
-        """, (message_id, chat_id, topic_id, user_id, text))
-        await db.commit()
+def clear_old_cache():
+    """Очищает старый кэш (старше 48 часов)"""
+    data = load_data()
+    cutoff = datetime.now().timestamp() - (48 * 3600)  # 48 часов
+    data["cache"] = [
+        msg for msg in data["cache"]
+        if datetime.fromisoformat(msg["timestamp"]).timestamp() > cutoff
+    ]
+    save_data(data)
 
-async def get_user_messages(chat_id, user_id, topic_id=None):
-    async with aiosqlite.connect(DB_NAME) as db:
-        if topic_id is not None:
-            async with db.execute(
-                "SELECT message_id FROM message_cache WHERE chat_id = ? AND user_id = ? AND topic_id = ?",
-                (chat_id, user_id, topic_id)
-            ) as cursor:
-                rows = await cursor.fetchall()
-                return [row[0] for row in rows]
-        else:
-            async with db.execute(
-                "SELECT message_id FROM message_cache WHERE chat_id = ? AND user_id = ?",
-                (chat_id, user_id)
-            ) as cursor:
-                rows = await cursor.fetchall()
-                return [row[0] for row in rows]
+def get_all_rules_summary():
+    """Возвращает все правила для отображения"""
+    data = load_data()
+    result = []
+    for key, words in data["rules"].items():
+        parts = key.rsplit("_", 1)
+        chat_id = int(parts[0])
+        topic_id = int(parts[1]) if parts[1] != "global" else None
+        result.append((chat_id, topic_id, words))
+    return sorted(result, key=lambda x: (x[0], x[1] or 0))
 
-async def clear_user_cache(chat_id, user_id, topic_id=None):
-    async with aiosqlite.connect(DB_NAME) as db:
-        if topic_id is not None:
-            await db.execute(
-                "DELETE FROM message_cache WHERE chat_id = ? AND user_id = ? AND topic_id = ?",
-                (chat_id, user_id, topic_id)
-            )
-        else:
-            await db.execute(
-                "DELETE FROM message_cache WHERE chat_id = ? AND user_id = ?",
-                (chat_id, user_id)
-            )
-        await db.commit()
-
-async def clear_old_cache():
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
-            DELETE FROM message_cache WHERE timestamp < datetime('now', '-48 hours')
-        """)
-        await db.commit()
+def get_all_topics_for_chat(chat_id):
+    """Возвращает все темы для чата"""
+    data = load_data()
+    result = []
+    for key, words in data["rules"].items():
+        if key.startswith(f"{chat_id}_"):
+            parts = key.rsplit("_", 1)
+            topic_id = int(parts[1]) if parts[1] != "global" else None
+            result.append((topic_id, words))
+    return sorted(result, key=lambda x: x[0] or 0)
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def get_chat_type_name(topic_id):
-    return "Ветка" if topic_id else "Вся группа"
+    return "Ветка" if topic_id is not None else "Вся группа"
 
 def get_chat_type_emoji(topic_id):
-    return "🧵" if topic_id else "🌐"
+    return "🧵" if topic_id is not None else "🌐"
 
 def get_chat_type_prefix(topic_id):
-    return "Ветка #" if topic_id else "Вся группа"
+    return "Ветка #" if topic_id is not None else "Вся группа"
 
 def create_navigation_keyboard(current_chat_id=None):
+    """Создает клавиатуру навигации"""
     builder = InlineKeyboardBuilder()
     
     # Кнопки для навигации
@@ -377,7 +351,7 @@ async def callback_help(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "all_chats")
 async def callback_all_chats(callback: types.CallbackQuery):
-    rules = await get_all_rules_summary()
+    rules = get_all_rules_summary()
     
     if not rules:
         await callback.message.edit_text(
@@ -398,18 +372,15 @@ async def callback_all_chats(callback: types.CallbackQuery):
             text += f"━━━━━━━━━━━━━━━━━━━━\n"
             text += f"🆔 <b>Группа:</b> <code>{chat_id}</code>\n"
         
-        topic_name = f"Ветка #{topic_id}" if topic_id else "Вся группа"
+        topic_name = get_chat_type_prefix(topic_id) + (str(topic_id) if topic_id is not None else "")
         text += f"  📌 <b>{topic_name}:</b> {len(words)} стоп-слов\n"
         
         if words:
-            # Показываем все слова, но если их много, делаем аккуратный вывод
-            if len(words) <= 10:
-                for word in words:
-                    text += f"     • <code>{word}</code>\n"
-            else:
-                for word in words[:10]:
-                    text += f"     • <code>{word}</code>\n"
-                text += f"     • ... и ещё {len(words) - 10} стоп-слов\n"
+            # Показываем все слова (максимум 20, чтобы не перегружать)
+            for i, word in enumerate(words[:20], 1):
+                text += f"     {i}. <code>{word}</code>\n"
+            if len(words) > 20:
+                text += f"     • ... и ещё {len(words) - 20} стоп-слов\n"
         
         text += "\n"
     
@@ -480,7 +451,7 @@ async def cmd_all(message: Message):
     if not await is_admin_in_pm(message):
         return
     
-    rules = await get_all_rules_summary()
+    rules = get_all_rules_summary()
     
     if not rules:
         await message.answer(
@@ -499,18 +470,15 @@ async def cmd_all(message: Message):
             text += f"━━━━━━━━━━━━━━━━━━━━\n"
             text += f"🆔 <b>Группа:</b> <code>{chat_id}</code>\n"
         
-        topic_name = f"Ветка #{topic_id}" if topic_id else "Вся группа"
+        topic_name = get_chat_type_prefix(topic_id) + (str(topic_id) if topic_id is not None else "")
         text += f"  📌 <b>{topic_name}:</b> {len(words)} стоп-слов\n"
         
         if words:
-            # Показываем все слова, но если их много, делаем аккуратный вывод
-            if len(words) <= 10:
-                for word in words:
-                    text += f"     • <code>{word}</code>\n"
-            else:
-                for word in words[:10]:
-                    text += f"     • <code>{word}</code>\n"
-                text += f"     • ... и ещё {len(words) - 10} стоп-слов\n"
+            # Показываем все слова (максимум 20, чтобы не перегружать)
+            for i, word in enumerate(words[:20], 1):
+                text += f"     {i}. <code>{word}</code>\n"
+            if len(words) > 20:
+                text += f"     • ... и ещё {len(words) - 20} стоп-слов\n"
         
         text += "\n"
     
@@ -544,7 +512,7 @@ async def cmd_rules(message: Message):
         chat_id = int(args[1])
         topic_id = int(args[2]) if len(args) > 2 and args[2] != "0" else None
         
-        words = await get_rules(chat_id, topic_id)
+        words = get_rules(chat_id, topic_id)
         
         if not words:
             await message.answer(
@@ -604,21 +572,15 @@ async def cmd_add(message: Message):
         topic_id = int(args[2]) if args[2] != "0" else None
         word = " ".join(args[3:])
         
-        current_words = await get_rules(chat_id, topic_id)
-        await save_rules_backup(chat_id, topic_id, current_words)
-        
-        if word not in current_words:
-            current_words.append(word)
-            await update_rules(chat_id, topic_id, current_words)
-            
-            topic_name = f"Ветка #{topic_id}" if topic_id else "Вся группа"
+        if add_rule(chat_id, topic_id, word):
+            topic_name = get_chat_type_prefix(topic_id) + (str(topic_id) if topic_id is not None else "")
             
             await message.answer(
                 f"✅ <b>Стоп-слово добавлено!</b>\n\n"
                 f"📌 <b>Группа:</b> <code>{chat_id}</code>\n"
                 f"🧵 <b>{topic_name}:</b>\n"
                 f"   • <code>{word}</code>\n\n"
-                f"Всего стоп-слов в этой секции: {len(current_words)}",
+                f"Всего стоп-слов в этой секции: {len(get_rules(chat_id, topic_id))}",
                 parse_mode="HTML"
             )
         else:
@@ -657,16 +619,15 @@ async def cmd_del(message: Message):
         topic_id = int(args[2]) if args[2] != "0" else None
         word = " ".join(args[3:])
         
-        success, remaining = await delete_single_rule(chat_id, topic_id, word)
-        topic_name = f"Ветка #{topic_id}" if topic_id else "Вся группа"
-        
-        if success:
+        if del_rule(chat_id, topic_id, word):
+            topic_name = get_chat_type_prefix(topic_id) + (str(topic_id) if topic_id is not None else "")
+            
             await message.answer(
                 f"✅ <b>Стоп-слово удалено!</b>\n\n"
                 f"📌 <b>Группа:</b> <code>{chat_id}</code>\n"
                 f"🧵 <b>{topic_name}:</b>\n"
                 f"   • <code>{word}</code>\n\n"
-                f"Осталось стоп-слов в этой секции: {remaining}",
+                f"Осталось стоп-слов в этой секции: {len(get_rules(chat_id, topic_id))}",
                 parse_mode="HTML"
             )
         else:
@@ -710,7 +671,7 @@ async def cmd_clean(message: Message):
         
         await message.answer(f"🔄 Удаляю сообщения пользователя <code>{user_id}</code>...", parse_mode="HTML")
         
-        msg_ids = await get_user_messages(chat_id, user_id, topic_id)
+        msg_ids = get_user_messages(chat_id, user_id, topic_id)
         deleted = 0
         
         for msg_id in msg_ids:
@@ -721,9 +682,9 @@ async def cmd_clean(message: Message):
             except Exception as e:
                 logging.error(f"❌ Не удалил {msg_id}: {e}")
         
-        await clear_user_cache(chat_id, user_id, topic_id)
+        clear_user_cache(chat_id, user_id, topic_id)
         
-        topic_name = f"Ветка #{topic_id}" if topic_id else "Вся группа"
+        topic_name = get_chat_type_prefix(topic_id) + (str(topic_id) if topic_id is not None else "")
         
         if deleted == 0:
             await message.answer(
@@ -771,10 +732,9 @@ async def cmd_undo(message: Message):
         chat_id = int(args[1])
         topic_id = int(args[2]) if args[2] != "0" else None
         
-        success = await undo_last_change(chat_id, topic_id)
-        topic_name = f"Ветка #{topic_id}" if topic_id else "Вся группа"
-        
-        if success:
+        if undo_last_change(chat_id, topic_id):
+            topic_name = get_chat_type_prefix(topic_id) + (str(topic_id) if topic_id is not None else "")
+            
             await message.answer(
                 f"↩️ <b>Изменения откачены!</b>\n\n"
                 f"📌 <b>Группа:</b> <code>{chat_id}</code>\n"
@@ -809,16 +769,16 @@ async def check_spam(message: Message):
     text = message.text or ""
     
     # Кэшируем сообщение (для функции /clean)
-    await cache_message(message.message_id, chat_id, topic_id, user_id, text)
+    cache_message(message.message_id, chat_id, topic_id, user_id, text)
     
     # Если нет текста — пропускаем
     if not text:
         return
     
     # Загружаем правила: сначала для ветки, потом для всей группы
-    words = await get_rules(chat_id, topic_id)
+    words = get_rules(chat_id, topic_id)
     if not words:
-        words = await get_rules(chat_id, None)
+        words = get_rules(chat_id, None)
     
     if not words:
         return
@@ -837,12 +797,11 @@ async def check_spam(message: Message):
 async def clear_cache_periodically():
     while True:
         await asyncio.sleep(21600)  # 6 часов
-        await clear_old_cache()
+        clear_old_cache()
         logging.info("🧹 Старый кэш очищен")
 
 # --- ЗАПУСК ---
 async def main():
-    await init_db()
     asyncio.create_task(clear_cache_periodically())
     me = await bot.get_me()
     logging.info(f"🤖 Бот запущен: @{me.username}")
