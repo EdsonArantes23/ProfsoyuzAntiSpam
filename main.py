@@ -41,17 +41,29 @@ def save_data(data):
         logging.error(f"Ошибка сохранения: {e}")
 
 def get_rules_key(chat_id, topic_id):
-    """Генерирует ключ для правил"""
+    """
+    Генерирует ключ для правил.
+    topic_id может быть None (для всей группы/"веб-ветки _1") или числом (для настоящих тем).
+    """
+    # Используем "global" для None, чтобы избежать проблем с ключами
     return f"{chat_id}_{topic_id}" if topic_id is not None else f"{chat_id}_global"
 
 def get_rules(chat_id, topic_id=None):
-    """Получает правила для чата/темы"""
+    """
+    Получает правила для чата/темы.
+    topic_id = None соответствует "веб-ветке _1" или всей основной группе.
+    topic_id = число соответствует настоящей теме (topic).
+    """
     data = load_data()
     key = get_rules_key(chat_id, topic_id)
     return data["rules"].get(key, [])
 
 def add_rule(chat_id, topic_id, word):
-    """Добавляет правило"""
+    """
+    Добавляет правило.
+    topic_id = None используется для "веб-ветки _1" и всей основной группы.
+    topic_id = число используется для настоящих тем (topics).
+    """
     data = load_data()
     key = get_rules_key(chat_id, topic_id)
     
@@ -74,7 +86,11 @@ def add_rule(chat_id, topic_id, word):
     return False
 
 def del_rule(chat_id, topic_id, word):
-    """Удаляет правило"""
+    """
+    Удаляет правило.
+    topic_id = None используется для "веб-ветки _1" и всей основной группы.
+    topic_id = число используется для настоящих тем (topics).
+    """
     data = load_data()
     key = get_rules_key(chat_id, topic_id)
     
@@ -94,7 +110,11 @@ def del_rule(chat_id, topic_id, word):
     return False
 
 def undo_last_change(chat_id, topic_id):
-    """Откатывает последнее изменение"""
+    """
+    Откатывает последнее изменение.
+    topic_id = None используется для "веб-ветки _1" и всей основной группы.
+    topic_id = число используется для настоящих тем (topics).
+    """
     data = load_data()
     # Ищем последнее изменение для этого чата/топика
     for i in range(len(data["history"]) - 1, -1, -1):
@@ -164,30 +184,39 @@ def get_all_rules_summary():
     for key, words in data["rules"].items():
         parts = key.rsplit("_", 1)
         chat_id = int(parts[0])
-        topic_id = int(parts[1]) if parts[1] != "global" else None
+        # Проверяем, является ли последняя часть числом (topic_id) или "global"
+        if parts[1] == "global":
+            topic_id = None
+        else:
+            topic_id = int(parts[1])
         result.append((chat_id, topic_id, words))
-    return sorted(result, key=lambda x: (x[0], x[1] or 0))
+    # Сортируем: сначала по chat_id, потом None (вся группа) идут первыми, затем по topic_id
+    return sorted(result, key=lambda x: (x[0], x[1] is not None, x[1] or 0))
 
 def get_all_topics_for_chat(chat_id):
-    """Возвращает все темы для чата"""
+    """
+    Возвращает все настоящие темы (не включая "веб-ветку _1" или всю группу) для чата.
+    Используется в интерфейсе для отображения списка тем.
+    """
     data = load_data()
     result = []
     for key, words in data["rules"].items():
-        if key.startswith(f"{chat_id}_"):
-            parts = key.rsplit("_", 1)
-            topic_id = int(parts[1]) if parts[1] != "global" else None
+        parts = key.rsplit("_", 1)
+        stored_chat_id = int(parts[0])
+        if stored_chat_id == chat_id and parts[1] != "global":
+            topic_id = int(parts[1])
             result.append((topic_id, words))
-    return sorted(result, key=lambda x: x[0] or 0)
+    return sorted(result, key=lambda x: x[0])
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def get_chat_type_name(topic_id):
-    return "Ветка" if topic_id is not None else "Вся группа"
+    return "Тема" if topic_id is not None else "Вся группа / Веб-ветка _1"
 
 def get_chat_type_emoji(topic_id):
-    return "🧵" if topic_id is not None else "🌐"
+    return "🏷" if topic_id is not None else "🌐"
 
 def get_chat_type_prefix(topic_id):
-    return "Ветка #" if topic_id is not None else "Вся группа"
+    return "Тема #" if topic_id is not None else "Вся группа / Веб-ветка _1"
 
 def create_navigation_keyboard(current_chat_id=None):
     """Создает клавиатуру навигации"""
@@ -231,31 +260,35 @@ async def cmd_start(message: Message):
             "Этот бот поможет вам автоматически удалять спам и нежелательные сообщения в ваших чатах.\n\n"
             "🔧 <b>Основные функции:</b>\n"
             "• Удаление сообщений по стоп-словам\n"
-            "• Поддержка групп и веток\n"
+            "• Поддержка групп и <u>настоящих тем (форумов)</u>\n"
+            "• Также работает с \"веб-веткой _1\" (где <code>message_thread_id = None</code>)\n"
             "• Удобное управление через команды\n"
             "• Быстрая очистка сообщений\n\n"
             "📌 <b>Доступные команды:</b>\n\n"
             "➕ <b>/add &lt;chat_id&gt; &lt;topic_id&gt; &lt;слово&gt;</b>\n"
             "   Добавляет стоп-слово в правила\n"
-            "   Пример: /add -1001234567890 0 казино\n\n"
+            "   Пример: /add -1001234567890 0 казино\n"
+            "   Пример (тема): /add -1001234567890 123 /dick\n\n"
+            "   <b>ВАЖНО:</b> <code>topic_id = 0</code> используется для \"веб-ветки _1\" и всей основной группы.\n\n"
             "➖ <b>/del &lt;chat_id&gt; &lt;topic_id&gt; &lt;слово&gt;</b>\n"
             "   Удаляет стоп-слово из правил\n"
-            "   Пример: /del -1001234567890 1 /dick\n\n"
+            "   Пример: /del -1001234567890 123 /dick\n\n"
             "📋 <b>/rules &lt;chat_id&gt; [&lt;topic_id&gt;]</b>\n"
-            "   Показывает все правила для чата или ветки\n"
-            "   Пример: /rules -1001234567890 1\n\n"
+            "   Показывает все правила для чата или темы\n"
+            "   Пример: /rules -1001234567890 123\n\n"
             "📊 <b>/all</b>\n"
             "   Показывает все правила во всех чатах\n\n"
             "↩️ <b>/undo &lt;chat_id&gt; &lt;topic_id&gt;</b>\n"
             "   Откатывает последнее изменение правил\n"
-            "   Пример: /undo -1001234567890 1\n\n"
+            "   Пример: /undo -1001234567890 123\n\n"
             "🗑 <b>/clean &lt;chat_id&gt; &lt;topic_id&gt; &lt;user_id&gt;</b>\n"
             "   Удаляет все сообщения пользователя из кэша\n"
             "   Пример: /clean -1001234567890 0 1264548383\n\n"
             "ℹ️ <b>/info</b>\n"
-            "   Показывает как узнать ID чата или ветки\n\n"
+            "   Показывает как узнать ID чата или темы\n\n"
             "💡 <b>Совет:</b>\n"
-            "• Используйте <code>0</code> вместо <code>topic_id</code>, чтобы применить правило ко всему чату\n"
+            "• Используйте <code>0</code> вместо <code>topic_id</code>, чтобы применить правило к \"веб-ветке _1\" или всей группе\n"
+            "• <code>topic_id</code> — это <u>числовой ID настоящей темы</u> (форума)\n"
             "• Бот удаляет только сообщения за последние 48 часов"
         )
         
@@ -278,9 +311,9 @@ async def callback_view_rules(callback: types.CallbackQuery):
         "Введите команду:\n"
         "/rules <code>&lt;chat_id&gt;</code> [<code>topic_id</code>]\n\n"
         "📌 <b>Примеры:</b>\n"
-        "/rules -1001234567890 — для всей группы\n"
-        "/rules -1001234567890 1 — для ветки 1\n\n"
-        "💡 Вы также можете переслать сообщение из чата, чтобы автоматически получить ID.",
+        "/rules -1001234567890 — для всей группы / веб-ветки _1\n"
+        "/rules -1001234567890 123 — для темы 123\n\n"
+        "💡 Вы также можете переслать сообщение из темы боту, чтобы автоматически получить ID.",
         parse_mode="HTML",
         reply_markup=create_navigation_keyboard(None)
     )
@@ -293,9 +326,9 @@ async def callback_add_rule(callback: types.CallbackQuery):
         "Введите команду:\n"
         "/add <code>&lt;chat_id&gt;</code> <code>&lt;topic_id&gt;</code> <code>&lt;слово&gt;</code>\n\n"
         "📌 <b>Примеры:</b>\n"
-        "/add -1001234567890 0 казино — для всей группы\n"
-        "/add -1001234567890 1 /dick — для ветки 1\n\n"
-        "💡 Используйте <code>0</code> для всей группы или номер ветки.",
+        "/add -1001234567890 0 казино — для всей группы / веб-ветки _1\n"
+        "/add -1001234567890 123 /dick — для темы 123\n\n"
+        "💡 Используйте <code>0</code> для всей группы / веб-ветки _1 или числовой ID темы.",
         parse_mode="HTML",
         reply_markup=create_navigation_keyboard(None)
     )
@@ -321,16 +354,18 @@ async def callback_help(callback: types.CallbackQuery):
         "📚 <b>Инструкция по использованию ProfsoyuzAntiSpam Bot</b>\n\n"
         
         "<b>1. Получение ID чата/темы</b>\n"
-        "• Перешлите любое сообщение из чата боту\n"
+        "• Перешлите любое сообщение из чата или темы боту\n"
         "• Бот покажет ID чата и (если есть) ID темы\n\n"
         
         "<b>2. Добавление стоп-слов</b>\n"
         "• /add <code>&lt;chat_id&gt;</code> <code>&lt;topic_id&gt;</code> <code>&lt;слово&gt;</code>\n"
-        "• Например: /add -1001234567890 0 казино\n\n"
+        "• Например: /add -1001234567890 0 казино\n"
+        "• Или (для темы): /add -1001234567890 123 /dick\n"
+        "• <b>ВАЖНО:</b> <code>topic_id = 0</code> используется для \"веб-ветки _1\" и всей основной группы.\n\n"
         
         "<b>3. Просмотр правил</b>\n"
         "• /rules <code>&lt;chat_id&gt;</code> — все правила для чата\n"
-        "• /rules <code>&lt;chat_id&gt;</code> <code>&lt;topic_id&gt;</code> — правила для ветки\n\n"
+        "• /rules <code>&lt;chat_id&gt;</code> <code>&lt;topic_id&gt;</code> — правила для темы\n\n"
         
         "<b>4. Удаление правил</b>\n"
         "• /del <code>&lt;chat_id&gt;</code> <code>&lt;topic_id&gt;</code> <code>&lt;слово&gt;</code>\n\n"
@@ -339,7 +374,8 @@ async def callback_help(callback: types.CallbackQuery):
         "• /clean <code>&lt;chat_id&gt;</code> <code>&lt;topic_id&gt;</code> <code>&lt;user_id&gt;</code>\n\n"
         
         "💡 <b>Совет:</b>\n"
-        "• Используйте <code>0</code> вместо <code>topic_id</code>, чтобы применить правило ко всему чату\n"
+        "• Используйте <code>0</code> вместо <code>topic_id</code>, чтобы применить правило к \"веб-ветке _1\" или всей группе\n"
+        "• <code>topic_id</code> — это <u>числовой ID настоящей темы</u> (форума)\n"
         "• Бот удаляет только сообщения за последние 48 часов"
     )
     
@@ -373,7 +409,7 @@ async def callback_all_chats(callback: types.CallbackQuery):
             text += f"━━━━━━━━━━━━━━━━━━━━\n"
             text += f"🆔 <b>Группа:</b> <code>{chat_id}</code>\n"
         
-        topic_name = get_chat_type_prefix(topic_id) + (str(topic_id) if topic_id is not None else "")
+        topic_name = get_chat_type_prefix(topic_id) + ("" if topic_id is None else f" #{topic_id}")
         text += f"  📌 <b>{topic_name}:</b> {len(words)} стоп-слов\n"
         
         if words:
@@ -415,28 +451,28 @@ async def cmd_info(message: Message):
         fwd = message.reply_to_message
         chat_id = fwd.chat.id
         
-        # ПРАВИЛЬНЫЙ СПОСОБ ОПРЕДЕЛЕНИЯ ВЕТКИ В AIOTGRAM 3.X
+        # ПРАВИЛЬНЫЙ СПОСОБ ОПРЕДЕЛЕНИЯ ТЕМЫ В AIOTGRAM 3.X
         topic_id = fwd.message_thread_id  # Это ключевая исправленная строка
         
         chat_name = fwd.chat.title or "Чат"
         
         # ДОБАВЛЯЕМ ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ
-        logging.info(f"ℹ️ Получен запрос info для чата: {chat_id}, ветка: {topic_id}")
+        logging.info(f"ℹ️ Получен запрос info для чата: {chat_id}, тема: {topic_id}")
         logging.info(f"ℹ️ Тип объекта: {type(fwd)}")
         logging.info(f"ℹ️ Доступные атрибуты: {dir(fwd)}")
         
         text = (
-            "🔍 <b>Информация о чате</b>\n\n"
+            "🔍 <b>Информация о чате/теме</b>\n\n"
             f"📌 <b>Название:</b> <code>{chat_name}</code>\n"
             f"🆔 <b>Chat ID:</b> <code>{chat_id}</code>\n"
         )
         
         if topic_id is not None:
-            text += f"🧵 <b>Topic ID:</b> <code>{topic_id}</code>\n"
+            text += f"🏷 <b>Topic ID:</b> <code>{topic_id}</code>\n"
             # ДОБАВЛЯЕМ ПОДСКАЗКУ ПОЛЬЗОВАТЕЛЮ
             text += f"💡 <b>Используйте этот ID:</b> <code>{topic_id}</code>\n"
         else:
-            text += "🧵 <b>Topic ID:</b> <code>0</code> (обычная группа)\n"
+            text += "🌐 <b>Topic ID:</b> <code>0</code> (вся группа / веб-ветка _1)\n"
         
         text += f"👤 <b>Отправитель:</b> <code>{fwd.from_user.id}</code>"
         
@@ -455,16 +491,17 @@ async def cmd_info(message: Message):
         # ДОПОЛНИТЕЛЬНОЕ УВЕДОМЛЕНИЕ В ЛС
         await message.answer(
             "⚠️ <b>Важно:</b>\n"
-            "• Ветка в Telegram имеет <b>свой уникальный ID</b>, который не совпадает с номером в URL\n"
-            "• Используйте именно этот ID в командах\n"
+            "• <u>Topic ID</u> — это <b>числовой идентификатор настоящей темы (форума)</b> в Telegram API.\n"
+            "• Если <b>Topic ID: 0</b>, это может быть <b>веб-ветка _1</b> или <b>вся основная группа</b>.\n"
+            "• Используйте <b>ID 0</b> в командах для настройки правил для \"веб-ветки _1\".\n"
             "• Пример правильной команды:\n"
-            f"<code>/add {chat_id} {topic_id or '0'} /dick</code>",
+            f"<code>/add {chat_id} 0 /dick</code>",
             parse_mode="HTML"
         )
     else:
         await message.answer(
             "ℹ️ <b>Как узнать ID чата или темы?</b>\n\n"
-            "1. Перешлите любое сообщение из чата боту\n"
+            "1. Перешлите любое сообщение из чата или темы боту\n"
             "2. Бот автоматически покажет ID чата и (если есть) ID темы\n\n"
             "💡 Вы также можете использовать команду:\n"
             "/info <code>&lt;chat_id&gt;</code> — для получения информации о чате",
@@ -495,7 +532,7 @@ async def cmd_all(message: Message):
             text += f"━━━━━━━━━━━━━━━━━━━━\n"
             text += f"🆔 <b>Группа:</b> <code>{chat_id}</code>\n"
         
-        topic_name = get_chat_type_prefix(topic_id) + (str(topic_id) if topic_id is not None else "")
+        topic_name = get_chat_type_prefix(topic_id) + ("" if topic_id is None else f" #{topic_id}")
         text += f"  📌 <b>{topic_name}:</b> {len(words)} стоп-слов\n"
         
         if words:
@@ -526,9 +563,9 @@ async def cmd_rules(message: Message):
             "Введите команду:\n"
             "/rules <code>&lt;chat_id&gt;</code> [<code>topic_id</code>]\n\n"
             "📌 <b>Примеры:</b>\n"
-            "/rules -1001234567890 — для всей группы\n"
-            "/rules -1001234567890 1 — для ветки 1\n\n"
-            "💡 Вы также можете переслать сообщение из чата, чтобы автоматически получить ID.",
+            "/rules -1001234567890 — для всей группы / веб-ветки _1\n"
+            "/rules -1001234567890 123 — для темы 123\n\n"
+            "💡 Вы также можете переслать сообщение из темы боту, чтобы автоматически получить ID.",
             parse_mode="HTML"
         )
         return
@@ -541,7 +578,7 @@ async def cmd_rules(message: Message):
         
         if not words:
             await message.answer(
-                f"ostringstream <b>Нет правил для {get_chat_type_prefix(topic_id)}{topic_id or ''}</b>\n\n"
+                f"ostringstream <b>Нет правил для {get_chat_type_prefix(topic_id)}{'' if topic_id is None else f' #{topic_id}'}</b>\n\n"
                 "Вы можете добавить правила с помощью команды:\n"
                 f"/add <code>{chat_id}</code> <code>{topic_id or 0}</code> <code>&lt;слово&gt;</code>",
                 parse_mode="HTML"
@@ -549,7 +586,7 @@ async def cmd_rules(message: Message):
             return
         
         text = (
-            f"{get_chat_type_emoji(topic_id)} <b>{get_chat_type_prefix(topic_id)}{topic_id or ''}</b>\n"
+            f"{get_chat_type_emoji(topic_id)} <b>{get_chat_type_prefix(topic_id)}{'' if topic_id is None else f' #{topic_id}'}</b>\n"
             f"Для чата: <code>{chat_id}</code>\n\n"
             "<b>Стоп-слова:</b>\n"
         )
@@ -562,7 +599,7 @@ async def cmd_rules(message: Message):
         # Создаем клавиатуру с действиями
         keyboard = InlineKeyboardBuilder()
         keyboard.button(text="➕ Добавить стоп-слово", callback_data=f"add_{chat_id}_{topic_id or 0}")
-        keyboard.button(text="◀️ Назад к списку веток", callback_data=f"topics_{chat_id}")
+        keyboard.button(text="◀️ Назад к списку тем", callback_data=f"topics_{chat_id}")
         keyboard.adjust(1)
         
         await message.answer(text, parse_mode="HTML", reply_markup=keyboard.as_markup())
@@ -585,9 +622,9 @@ async def cmd_add(message: Message):
             "Введите команду:\n"
             "/add <code>&lt;chat_id&gt;</code> <code>&lt;topic_id&gt;</code> <code>&lt;слово&gt;</code>\n\n"
             "📌 <b>Примеры:</b>\n"
-            "/add -1001234567890 0 казино — для всей группы\n"
-            "/add -1001234567890 1 /dick — для ветки 1\n\n"
-            "💡 Используйте <code>0</code> для всей группы или номер ветки.",
+            "/add -1001234567890 0 казино — для всей группы / веб-ветки _1\n"
+            "/add -1001234567890 123 /dick — для темы 123\n\n"
+            "💡 Используйте <code>0</code> для всей группы / веб-ветки _1 или числовой ID темы.",
             parse_mode="HTML"
         )
         return
@@ -598,12 +635,12 @@ async def cmd_add(message: Message):
         word = " ".join(args[3:])
         
         if add_rule(chat_id, topic_id, word):
-            topic_name = get_chat_type_prefix(topic_id) + (str(topic_id) if topic_id is not None else "")
+            topic_name = get_chat_type_prefix(topic_id) + ("" if topic_id is None else f" #{topic_id}")
             
             await message.answer(
                 f"✅ <b>Стоп-слово добавлено!</b>\n\n"
                 f"📌 <b>Группа:</b> <code>{chat_id}</code>\n"
-                f"🧵 <b>{topic_name}:</b>\n"
+                f"🏷 <b>{topic_name}:</b>\n"
                 f"   • <code>{word}</code>\n\n"
                 f"Всего стоп-слов в этой секции: {len(get_rules(chat_id, topic_id))}",
                 parse_mode="HTML"
@@ -612,7 +649,7 @@ async def cmd_add(message: Message):
             await message.answer(
                 f"⚠️ <b>Внимание</b>: Это слово уже в списке\n\n"
                 f"Группа: <code>{chat_id}</code>\n"
-                f"Ветка: <code>{topic_id or 'вся группа'}</code>",
+                f"Тема: <code>{topic_id or 'вся группа / веб-ветка _1'}</code>",
                 parse_mode="HTML"
             )
     except ValueError:
@@ -634,7 +671,7 @@ async def cmd_del(message: Message):
             "Введите команду:\n"
             "/del <code>&lt;chat_id&gt;</code> <code>&lt;topic_id&gt;</code> <code>&lt;слово&gt;</code>\n\n"
             "📌 <b>Пример:</b>\n"
-            "/del -1001234567890 1 /dick",
+            "/del -1001234567890 123 /dick",
             parse_mode="HTML"
         )
         return
@@ -645,12 +682,12 @@ async def cmd_del(message: Message):
         word = " ".join(args[3:])
         
         if del_rule(chat_id, topic_id, word):
-            topic_name = get_chat_type_prefix(topic_id) + (str(topic_id) if topic_id is not None else "")
+            topic_name = get_chat_type_prefix(topic_id) + ("" if topic_id is None else f" #{topic_id}")
             
             await message.answer(
                 f"✅ <b>Стоп-слово удалено!</b>\n\n"
                 f"📌 <b>Группа:</b> <code>{chat_id}</code>\n"
-                f"🧵 <b>{topic_name}:</b>\n"
+                f"🏷 <b>{topic_name}:</b>\n"
                 f"   • <code>{word}</code>\n\n"
                 f"Осталось стоп-слов в этой секции: {len(get_rules(chat_id, topic_id))}",
                 parse_mode="HTML"
@@ -659,7 +696,7 @@ async def cmd_del(message: Message):
             await message.answer(
                 f"⚠️ <b>Внимание</b>: Слово не найдено\n\n"
                 f"Группа: <code>{chat_id}</code>\n"
-                f"Ветка: <code>{topic_id or 'вся группа'}</code>\n\n"
+                f"Тема: <code>{topic_id or 'вся группа / веб-ветка _1'}</code>\n\n"
                 "🔍 Вы можете проверить правила с помощью:\n"
                 f"/rules <code>{chat_id}</code> <code>{topic_id or 0}</code>",
                 parse_mode="HTML"
@@ -709,13 +746,13 @@ async def cmd_clean(message: Message):
         
         clear_user_cache(chat_id, user_id, topic_id)
         
-        topic_name = get_chat_type_prefix(topic_id) + (str(topic_id) if topic_id is not None else "")
+        topic_name = get_chat_type_prefix(topic_id) + ("" if topic_id is None else f" #{topic_id}")
         
         if deleted == 0:
             await message.answer(
                 f"⚠️ <b>Нет сообщений для удаления</b>\n\n"
                 f"📌 <b>Группа:</b> <code>{chat_id}</code>\n"
-                f"🧵 <b>{topic_name}</b>\n"
+                f"🏷 <b>{topic_name}</b>\n"
                 f"👤 <b>Пользователь:</b> <code>{user_id}</code>\n\n"
                 "❌ Кэш пуст. Бот не сохранил сообщения.\n"
                 "💡 Сообщения удаляются только за последние 48 часов.",
@@ -725,7 +762,7 @@ async def cmd_clean(message: Message):
             await message.answer(
                 f"✅ <b>Успешно удалено: {deleted} сообщений</b>\n\n"
                 f"📌 <b>Группа:</b> <code>{chat_id}</code>\n"
-                f"🧵 <b>{topic_name}</b>\n"
+                f"🏷 <b>{topic_name}</b>\n"
                 f"👤 <b>Пользователь:</b> <code>{user_id}</code>",
                 parse_mode="HTML"
             )
@@ -748,7 +785,7 @@ async def cmd_undo(message: Message):
             "Введите команду:\n"
             "/undo <code>&lt;chat_id&gt;</code> <code>&lt;topic_id&gt;</code>\n\n"
             "📌 <b>Пример:</b>\n"
-            "/undo -1001234567890 1",
+            "/undo -1001234567890 123",
             parse_mode="HTML"
         )
         return
@@ -758,12 +795,12 @@ async def cmd_undo(message: Message):
         topic_id = int(args[2]) if args[2] != "0" else None
         
         if undo_last_change(chat_id, topic_id):
-            topic_name = get_chat_type_prefix(topic_id) + (str(topic_id) if topic_id is not None else "")
+            topic_name = get_chat_type_prefix(topic_id) + ("" if topic_id is None else f" #{topic_id}")
             
             await message.answer(
                 f"↩️ <b>Изменения откачены!</b>\n\n"
                 f"📌 <b>Группа:</b> <code>{chat_id}</code>\n"
-                f"🧵 <b>{topic_name}</b>\n\n"
+                f"🏷 <b>{topic_name}</b>\n\n"
                 "Последнее изменение было отменено.",
                 parse_mode="HTML"
             )
@@ -771,7 +808,7 @@ async def cmd_undo(message: Message):
             await message.answer(
                 "❌ <b>Ошибка</b>: Нечего откатывать\n\n"
                 f"Группа: <code>{chat_id}</code>\n"
-                f"Ветка: <code>{topic_id or 'вся группа'}</code>\n\n"
+                f"Тема: <code>{topic_id or 'вся группа / веб-ветка _1'}</code>\n\n"
                 "История изменений пуста.",
                 parse_mode="HTML"
             )
@@ -789,8 +826,8 @@ async def check_spam(message: Message):
         return
     
     chat_id = message.chat.id
-    # ПРАВИЛЬНЫЙ СПОСОБ ОПРЕДЕЛЕНИЯ ВЕТКИ В AIOTGRAM 3.X
-    topic_id = message.message_thread_id
+    # ПРАВИЛЬНЫЙ СПОСОБ ОПРЕДЕЛЕНИЯ ТЕМЫ В AIOTGRAM 3.X
+    topic_id = message.message_thread_id # Это ключевая строка
     user_id = message.from_user.id
     is_bot = message.from_user.is_bot
     text = message.text or ""
@@ -806,19 +843,20 @@ async def check_spam(message: Message):
         logging.info("⚠️ Нет текста, пропускаем")
         return
     
-    # Загружаем правила: сначала для ветки, потом для всей группы
+    # Загружаем правила: сначала для темы, потом для всей группы
+    # topic_id может быть None (для "веб-ветки _1") или числом (для настоящей темы)
     words = get_rules(chat_id, topic_id)
     if not words:
-        words = get_rules(chat_id, None)
+        words = get_rules(chat_id, None) # Если нет правил для темы, проверяем "всю группу / веб-ветку _1"
     
     if not words:
-        logging.info("ℹ️ Нет правил для этого чата")
+        logging.info("ℹ️ Нет правил для этого чата/темы")
         return
     
     # Проверка стоп-слов
     for word in words:
         if word.lower() in text.lower():
-            logging.info(f"🗑 СТОП-СЛОВО НАЙДЕНО: '{word}'")
+            logging.info(f"🗑 СТОП-СЛОВО НАЙДЕНО: '{word}' в теме {topic_id}")
             try:
                 await message.delete()
                 logging.info(f"✅ УСПЕШНО УДАЛЕНО")
